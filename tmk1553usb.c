@@ -40,6 +40,10 @@
 #endif
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5,0,0)
 #define _LINUX_5_0_
+#define _LINUX_4_0_
+#define _LINUX_3_0_
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4,0,0)
+#define _LINUX_4_0_
 #define _LINUX_3_0_
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(3,0,0)
 #define _LINUX_3_0_
@@ -55,7 +59,7 @@ MODULE_LICENSE("GPL");
 #define __64BIT__
 #endif
 
-#ifdef _LINUX_5_0_
+#if defined(_LINUX_5_0_) || defined (_LINUX_4_0_)
   #include <linux/sched/signal.h>
 #else
   #include <linux/signal.h>
@@ -1001,9 +1005,9 @@ struct usb_endpoint_descriptor * endpoint;
   int i;
   unsigned char devtype;
   int ret;
-  char speed[2];
+  char *speed = NULL;
   __u8 length;
-  u8 aSerialNumber[8];
+  u8 *aSerialNumber = NULL;
 #ifdef CONFIG_DEVFS_FS
   char name[20];
 #endif
@@ -1237,6 +1241,7 @@ nextdev:
 #endif
     usb_set_intfdata(interface, NULL);
     usb_deregister_dev(interface, &tmk1553busb_class);
+    ret = -EPERM;
     goto error;
   }
 #endif
@@ -1308,8 +1313,10 @@ nextdev:
 #endif
 #endif
 #ifdef _LINUX_2_4_
-      if(iface_desc->bNumEndpoints != 4)
+      if(iface_desc->bNumEndpoints != 4) {
+        ret = -EPERM;
         goto error;
+      }
       dev->ep2_address = iface_desc->endpoint[0].bEndpointAddress;
       dev->ep4_address = iface_desc->endpoint[1].bEndpointAddress;
       dev->ep6_address = iface_desc->endpoint[2].bEndpointAddress;
@@ -1325,6 +1332,7 @@ nextdev:
       {
         usb_set_intfdata(interface, NULL);
         usb_deregister_dev(interface, &tmk1553busb_class);
+        ret = -EPERM;
         goto error;
       }
       dev->ep2_address = iface_desc->endpoint[0].desc.bEndpointAddress;
@@ -1369,6 +1377,21 @@ nextdev:
     usb_set_intfdata(interface, NULL);
     usb_deregister_dev(interface, &tmk1553busb_class);
 #endif
+    ret = -EPERM;
+    goto error;
+  }
+
+  aSerialNumber = kmalloc (8, GFP_KERNEL);
+  if (aSerialNumber == NULL)
+  {
+#ifdef TMK1553BUSB_DEBUG
+    printk(KERN_INFO "tmk1553busb: Out of memory!\n");
+#endif
+#if defined(_LINUX_2_6_) || defined(_LINUX_3_0_)
+    usb_set_intfdata(interface, NULL);
+    usb_deregister_dev(interface, &tmk1553busb_class);
+#endif
+    ret = -ENOMEM;
     goto error;
   }
 
@@ -1389,6 +1412,7 @@ nextdev:
     usb_set_intfdata(interface, NULL);
     usb_deregister_dev(interface, &tmk1553busb_class);
 #endif
+    ret = -EPERM;
     goto error;
   }
 
@@ -1400,6 +1424,23 @@ nextdev:
   dev->SerialNumber += (aSerialNumber[2] - '0') * 100000;
   dev->SerialNumber += (aSerialNumber[1] - '0') * 1000000;
   dev->SerialNumber += (aSerialNumber[0] - '0') * 10000000;
+
+  kfree(aSerialNumber);
+  aSerialNumber = NULL;
+
+  speed = kmalloc (2, GFP_KERNEL);
+  if (speed == NULL)
+  {
+#ifdef TMK1553BUSB_DEBUG
+    printk(KERN_INFO "tmk1553busb: Out of memory!\n");
+#endif
+#if defined(_LINUX_2_6_) || defined(_LINUX_3_0_)
+    usb_set_intfdata(interface, NULL);
+    usb_deregister_dev(interface, &tmk1553busb_class);
+#endif
+    ret = -ENOMEM;
+    goto error;
+  }
 
   /* set up the device speed */
   ret = usb_control_msg(dev->udev,
@@ -1414,6 +1455,8 @@ nextdev:
 #ifdef TMK1553BUSB_DEBUG
     printk(KERN_INFO "tmk1553busb: USB speed %d\n", speed[1]);
 #endif
+  kfree(speed);
+  speed = NULL;
 
 //start thread
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,16)
@@ -1435,6 +1478,7 @@ nextdev:
 #ifdef TMK1553BUSB_DEBUG
     printk(KERN_INFO "tmk1553busb: int_thread start error!\n");
 #endif
+    ret = -EPERM;
     goto error;
   }
 #endif
@@ -1487,13 +1531,14 @@ error:
   dev = NULL;
 
 exit:
+  kfree(aSerialNumber);
   UNLOCK_DEVICE(&dev_lock[minor]);
 #ifdef _LINUX_2_4_
   return dev;
 #endif
 #if defined(_LINUX_2_6_) || defined(_LINUX_3_0_)
   if(dev == NULL)
-    return -EPERM;
+    return ret;
   else
     return 0;
 #endif
@@ -1900,7 +1945,7 @@ u32 TMK_tmkconfig(struct tmk1553busb * dev, u16 * awIn, u16 * awOut, u16 * awBuf
   int tmkNumber = (int)dev->minor;
   unsigned short tmkType;
 #ifdef TMK1553BUSB_DEBUG
-  char chBuf[8];
+  char* chBuf = NULL;
   int ret;
 #endif
 
@@ -1929,18 +1974,23 @@ u32 TMK_tmkconfig(struct tmk1553busb * dev, u16 * awIn, u16 * awOut, u16 * awBuf
     tmkError_usb[tmkNumber] = 0;
     bcreset_usb(tmkNumber);
 #ifdef TMK1553BUSB_DEBUG
-    ret = usb_control_msg(dev->udev,
-                          usb_rcvctrlpipe(dev->udev, 0),
-                          0xb4,
-                          USB_DIR_IN,
-                          0,
-                          0,
-                          chBuf,
-                          8,
-                          5*HZ);
-    printk(KERN_INFO "tmk1553busb: serial number: %c%c%c%c%c%c%c%c\n",
-                      chBuf[0], chBuf[1], chBuf[2], chBuf[3],
-                      chBuf[4], chBuf[5], chBuf[6], chBuf[7]);
+    chBuf = kmalloc(8, GFP_KERNEL);
+    if (chBuf) {
+      ret = usb_control_msg(dev->udev,
+                            usb_rcvctrlpipe(dev->udev, 0),
+                            0xb4,
+                            USB_DIR_IN,
+                            0,
+                            0,
+                            chBuf,
+                            8,
+                            5*HZ);
+      printk(KERN_INFO "tmk1553busb: serial number: %c%c%c%c%c%c%c%c\n",
+                        chBuf[0], chBuf[1], chBuf[2], chBuf[3],
+                        chBuf[4], chBuf[5], chBuf[6], chBuf[7]);
+      kfree(chBuf);
+      chBuf = NULL;
+    }
 #endif
     LOCK_IRQ(&intLock[tmkNumber]);
 //    tmkEvents &= ~(1<<tmkNumber);
@@ -2033,7 +2083,7 @@ u32 TMK_tmkwaitevents(struct tmk1553busb * dev, u16 * awIn, u16 * awOut, u16 * a
   int fWait;
   int tmkMyEvents = 0;
   long timeout;
-  #ifdef _LINUX_5_0_
+  #if defined(_LINUX_5_0_) || defined (_LINUX_4_0_)
     wait_queue_entry_t __wait;
   #else
     wait_queue_t __wait;
@@ -3079,7 +3129,7 @@ u32 TMK_MT_Start(struct tmk1553busb * dev, u16 * awIn, u16 * awOut, u16 * awBuf)
   int MaxBase;
   int iBase;
   u32 dwBufSize = (u32)(*((u32 *)(awIn)));
-  u8 buffer[1];
+  u8 *buffer = NULL;
   u16 tmkTimerCtrlT;
 
 #ifdef TMK1553BUSB_MT_DEBUG
@@ -3153,17 +3203,25 @@ u32 TMK_MT_Start(struct tmk1553busb * dev, u16 * awIn, u16 * awOut, u16 * awBuf)
     MonitorHwTimer[tmkNumber] = 0;
   UNLOCK_IRQ(&intLock[tmkNumber]);
 
-  buffer[0] = MonitorHwTimer[tmkNumber];
+  buffer = kmalloc(1, GFP_KERNEL);
+  if (buffer) {
+    buffer[0] = MonitorHwTimer[tmkNumber];
 
-  Result = usb_control_msg(dev->udev,
-                           usb_sndctrlpipe(dev->udev, 0),
-                           0xba,
-                           USB_DIR_OUT,
-                           0,
-                           0,
-                           buffer,
-                           1,
-                           5*HZ);
+    Result = usb_control_msg(dev->udev,
+                             usb_sndctrlpipe(dev->udev, 0),
+                             0xba,
+                             USB_DIR_OUT,
+                             0,
+                             0,
+                             buffer,
+                             1,
+                             5*HZ);
+    kfree(buffer);
+    buffer = NULL;
+  } else {
+    printk(KERN_ERR "%s: Out of memory!\n", __FUNCTION__);
+    Result = FALSE;
+  }
 
   if(Result == FALSE)
   {
@@ -3345,6 +3403,7 @@ u32 TMK_MT_Stop(struct tmk1553busb * dev, u16 * awIn, u16 * awOut, u16 * awBuf)
   int tmkNumber = (int)dev->minor;
   int ret;
   u8 Result = 0;
+  u8 *resultBuf = NULL;
 
 #ifdef TMK1553BUSB_MT_DEBUG
   printk(KERN_INFO "Tmk1553b: TMK_MT_Stop\n");
@@ -3367,15 +3426,23 @@ u32 TMK_MT_Stop(struct tmk1553busb * dev, u16 * awIn, u16 * awOut, u16 * awBuf)
 
   dev->intLoopMode = SLEEP_LOOP_MODE;
 
-  ret = usb_control_msg(dev->udev,
-                        usb_rcvctrlpipe(dev->udev, 0),
-                        0xbb,
-                        USB_DIR_IN,
-                        0,
-                        0,
-                        &Result,
-                        1,
-                        5*HZ);
+  resultBuf = kmalloc(1, GFP_KERNEL);
+  if (resultBuf) {
+    ret = usb_control_msg(dev->udev,
+                          usb_rcvctrlpipe(dev->udev, 0),
+                          0xbb,
+                          USB_DIR_IN,
+                          0,
+                          0,
+                          &resultBuf,
+                          1,
+                          5*HZ);
+    Result = *resultBuf;
+    kfree(resultBuf);
+    resultBuf = NULL;
+  } else {
+    printk(KERN_ERR "%s: Out of memory!\n", __FUNCTION__);
+  }
   dev->ResetEP6int = 1;
 
   LOCK_IRQ(&intLock[tmkNumber]);
@@ -3518,3 +3585,5 @@ u32 TMK_tmkreadsn(struct tmk1553busb * dev, u16 * awIn, u16 * awOut, u16 * awBuf
   }
   return dev->SerialNumber;
 }
+  
+/* vim: set et ts=2 sts=2 sw=2: */

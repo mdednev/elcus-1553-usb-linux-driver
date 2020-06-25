@@ -1,0 +1,11 @@
+/*.ko
+/*.o
+/*.o.d
+/*.o.cmd
+/*.ko.cmd
+/Module.symvers
+/modules.order
+/.tmp_versions/
+tags
+*.*~
+*~

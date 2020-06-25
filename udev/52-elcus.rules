@@ -1,0 +1,2 @@
+# Elcus TA1-USB device
+ATTRS{idVendor}=="04b4", ATTRS{idProduct}=="8613", MODE="664", GROUP="plugdev"
